@@ -274,7 +274,7 @@ with pm.Model() as model:
     )
 
     # Now we need a function that takes the amplitudes and generates the data.
-    y = pm.Normal(
+    y_ = pm.Normal(
         "y",
         mu=model_emission_line(gp_dispersion, true_wavelength, amplitudes, true_sigma, mean_flux, profile),
         sd=gp_flux_err.T,
@@ -290,13 +290,27 @@ with pm.Model() as model:
         rk_length_scale_1=true_metric[0, 0],
         rk_length_scale_2=true_metric[1, 1]
     )
+    init = None
 
     p_opt, result = pm.find_MAP(start=init, return_raw=True)
 
 
-def contourf_from_1d_vectors(x, y, z, ax=None, Nx=None, Ny=None, colorbar=False, colorbar_label=None):
+def colorbar(mappable, ax, fig):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    #last_axes = plt.gca()
+    #ax = mappable.axes
+    #fig = ax.figure
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cbar = fig.colorbar(mappable, cax=cax)
+    #plt.sca(ax)
+    return cbar
+
+def contourf_from_1d_vectors(x, y, z, ax=None, Nx=None, Ny=None, show_colorbar=False, colorbar_label=None, colorbar_kwds=None, **kwargs):
     if ax is None:
         fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
     
     xgrid = np.linspace(x.min(), x.max(), Nx or np.unique(x).size)
     ygrid = np.linspace(y.min(), y.max(), Ny or np.unique(y).size)
@@ -307,9 +321,11 @@ def contourf_from_1d_vectors(x, y, z, ax=None, Nx=None, Ny=None, colorbar=False,
         (xgrid, ygrid)
     )
 
-    contours = ax.contourf(xgrid, ygrid, zgrid, antialiased=False)
-    if colorbar:
-        cbar = plt.colorbar(contours)
+    contours = ax.contourf(xgrid, ygrid, zgrid, antialiased=False, **kwargs)
+    if show_colorbar:
+        fig.tight_layout()
+        cbar = colorbar(contours, ax=ax, fig=fig)
+        #cbar = plt.colorbar(contours, **colorbar_kwds)
         cbar.set_label(colorbar_label)
 
     return fig
@@ -337,25 +353,30 @@ opt_flux = model_emission_line(
 
 idx = 100
 
-fig, ax = plt.subplots()
-ax.plot(
-    dispersion[flux_slice],
-    gp_flux[idx],
-    c="k"
-)
-ax.plot(
-    dispersion[flux_slice],
-    opt_flux[idx],
-    c="tab:red"
-)
-ax.fill_between(
-    dispersion[flux_slice],
-    gp_flux[idx] - gp_flux_err[idx],
-    gp_flux[idx] + gp_flux_err[idx],
-    facecolor="#cccccc",
-    zorder=-1
-)
-ax.set_xlim(true_wavelength - 5, true_wavelength + 5)
+fig, axes = plt.subplots(2, 1, figsize=(4, 8))
+for ax in axes:
+        
+    ax.plot(
+        dispersion[flux_slice],
+        gp_flux[idx],
+        c="k"
+    )
+    ax.plot(
+        dispersion[flux_slice],
+        opt_flux[idx],
+        c="tab:red"
+    )
+    ax.fill_between(
+        dispersion[flux_slice],
+        gp_flux[idx] - gp_flux_err[idx],
+        gp_flux[idx] + gp_flux_err[idx],
+        facecolor="#cccccc",
+        zorder=-1
+    )
+axes[0].set_xlim(*dispersion[flux_slice][[0, -1]])
+axes[1].set_xlim(true_wavelength - 5, true_wavelength + 5)
+fig.tight_layout()
+axes[1].set_xlabel(r"Wavelength")
 fig.savefig(f"spaxal_{idx:.0f}.png")
 
 # Compare to true values.
@@ -368,6 +389,50 @@ fig_residual = contourf_from_1d_vectors(
     colorbar_label="amplitude residual"
 )
 fig_residual.savefig("residual.png")
+
+# Make key plot.
+vmin = np.min([np.nanmin(z), np.min(p_opt[f"amplitude_{true_wavelength:.0f}"])])
+vmax = np.max([np.nanmax(z), np.max(p_opt[f"amplitude_{true_wavelength:.0f}"])])
+
+
+fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+axes[0].contourf(
+    x, y,
+    z.reshape((N_x_px, N_y_px)),
+    vmin=vmin, vmax=vmax
+)
+contourf_from_1d_vectors(
+    *gp_xy.T,
+    p_opt[f"amplitude_{true_wavelength:.0f}"],
+    ax=axes[1],
+    vmin=vmin,
+    vmax=vmax,
+)
+axes[1].set_xlim(axes[0].get_xlim())
+axes[1].set_ylim(axes[0].get_ylim())
+
+contourf_from_1d_vectors(
+    *gp_xy.T,
+    p_opt[f"amplitude_{true_wavelength:.0f}"] - true_amplitudes,
+    ax=axes[2],
+    show_colorbar=True,
+    colorbar_kwds=None
+)
+axes[2].set_xlim(axes[0].get_xlim())
+axes[2].set_ylim(axes[0].get_ylim())
+
+axes[0].set_title(r"truth")
+axes[1].set_title(r"inferred")
+axes[2].set_title(r"residual")
+from matplotlib.ticker import MaxNLocator
+for ax in axes:
+    ax.xaxis.set_major_locator(MaxNLocator(4))
+    ax.yaxis.set_major_locator(MaxNLocator(4))
+    ax.set_aspect("equal")
+
+fig.tight_layout()
+fig.savefig("key.png")
+
 
 # Let's look at the worst fit.
 idx = np.argmax(np.abs(p_opt[f"amplitude_{true_wavelength:.0f}"] - true_amplitudes))
