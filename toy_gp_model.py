@@ -130,8 +130,12 @@ galaxy_flux = flux_mu * np.ones((xc, yc, dispersion.size))
 galaxy_flux *= relative_emission_flux
 
 # Assume white noise everywhere.
-galaxy_flux += np.random.normal(0, flux_std, size=(xc, yc, dispersion.size))
-galaxy_err = np.abs(np.random.normal(0, flux_std, size=(xc, yc, dispersion.size)))
+galaxy_err = flux_std * np.random.randn(xc, yc, dispersion.size)
+#galaxy_flux += np.random.normal(0, flux_std, size=(xc, yc, dispersion.size))
+galaxy_flux += galaxy_err * np.random.randn(xc, yc, dispersion.size)
+galaxy_err = np.abs(galaxy_err)
+#galaxy_err = np.abs(np.random.normal(0, flux_std, size=(xc, yc, dispersion.size)))
+
 
 # Plot the 'galaxy spectra' for two random spaxels to check the amplitudes
 # are actually different.
@@ -163,9 +167,11 @@ if subset is not None:
     gp_flux_err = gp_flux_err[:subset]
     gp_dispersion = gp_dispersion[:subset]
 
-gp_flux = gp_flux[:, 842:850]
-gp_flux_err = gp_flux_err[:, 842:850]
-gp_dispersion = gp_dispersion[:, 842:850]
+#flux_slice = slice(842, 850) # Use this if you want to just use pixels around the emission line
+flux_slice = slice(0, None)
+gp_flux = gp_flux[:, flux_slice]
+gp_flux_err = gp_flux_err[:, flux_slice]
+gp_dispersion = gp_dispersion[:, flux_slice]
 
 
 
@@ -173,12 +179,9 @@ import pymc3 as pm
 
 def model_emission_line(gp_dispersion, wavelength, amplitudes, sigma, mean_flux, profile):
     
-    # TODO: Don't use true flux value.
     S, P = shape = gp_dispersion.shape
-    #rel_emission_flux = amplitudes.reshape((-1, 1)) * profile             
     rel_emission_flux = amplitudes * profile
     rel_emission_flux += 1
-    #raise a
 
     return mean_flux * rel_emission_flux 
 
@@ -336,17 +339,17 @@ idx = 100
 
 fig, ax = plt.subplots()
 ax.plot(
-    dispersion[842:850],
+    dispersion[flux_slice],
     gp_flux[idx],
     c="k"
 )
 ax.plot(
-    dispersion[842:850],
+    dispersion[flux_slice],
     opt_flux[idx],
     c="tab:red"
 )
 ax.fill_between(
-    dispersion[842:850],
+    dispersion[flux_slice],
     gp_flux[idx] - gp_flux_err[idx],
     gp_flux[idx] + gp_flux_err[idx],
     facecolor="#cccccc",
@@ -371,24 +374,24 @@ idx = np.argmax(np.abs(p_opt[f"amplitude_{true_wavelength:.0f}"] - true_amplitud
 
 fig, ax = plt.subplots()
 ax.plot(
-    dispersion[842:850],
+    dispersion[flux_slice],
     gp_flux[idx],
     c="k"
 )
 ax.plot(
-    dispersion[842:850],
+    dispersion[flux_slice],
     opt_flux[idx],
     c="tab:red"
 )
 ax.fill_between(
-    dispersion[842:850],
+    dispersion[flux_slice],
     gp_flux[idx] - gp_flux_err[idx],
     gp_flux[idx] + gp_flux_err[idx],
     facecolor="#cccccc",
     zorder=-1
 )
 ax.set_xlim(true_wavelength - 5, true_wavelength + 5)
-
+fig.savefig("tmp.png")
 
 '''
 # Sampling.
@@ -396,7 +399,7 @@ np.random.seed(42)
 from time import time
 from pymc3.step_methods.hmc.quadpotential import QuadPotentialFull
 
-# Thank god for Dan Foreman-Mackey
+# Thank God(tm) for Dan Foreman-Mackey(tm)
 def get_step_for_trace(
         trace=None, 
         model=None,
