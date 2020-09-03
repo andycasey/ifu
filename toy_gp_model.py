@@ -106,7 +106,7 @@ ax.plot(dispersion, central_spaxal_flux)
 # Let's just get the median and standard deviation of flux, and assume
 # the flux will be roughly constant across spatial pixels.
 f = central_spaxal_flux[dispersion > 7000]
-flux_mu, flux_std = (np.nanmean(f), 10 * np.nanstd(f))
+flux_mu, flux_std = (np.nanmean(f), np.nanstd(f))
 # Note: flux_mu \approx 0.02, flux_std \approx 0.002
 
 # Now let's assume there is an emission line at 6739 angstroms,
@@ -163,6 +163,10 @@ if subset is not None:
     gp_flux_err = gp_flux_err[:subset]
     gp_dispersion = gp_dispersion[:subset]
 
+gp_flux = gp_flux[:, 842:850]
+gp_flux_err = gp_flux_err[:, 842:850]
+gp_dispersion = gp_dispersion[:, 842:850]
+
 
 
 import pymc3 as pm
@@ -187,11 +191,15 @@ with pm.Model() as model:
     residual = tt._shared((true_wavelength - gp_dispersion)/true_sigma)
     profile = pm.math.exp(-0.5 * residual**2).T
 
-
-    # TODO: Find the lengthscale, don't fit it.
+    #rk_length_scales =  pm.Uniform("mu_omega", 400, 800)
+    rk_length_scales = [
+        pm.Uniform("rk_length_scale_1", 0.5, 1),
+        pm.Uniform("rk_length_scale_2", 0.5, 1)
+    ]
     rk = pm.gp.cov.ExpQuad(
         input_dim=input_dim, 
-        ls=np.diag(true_metric), 
+        #ls=np.diag(true_metric), 
+        ls=rk_length_scales,
         active_dims=[0, 1]
     )
     """
@@ -213,21 +221,36 @@ with pm.Model() as model:
         l = \sqrt{\frac{1}{2\Gamma}}
     """
 
+    '''
     # TODO: Find the periodic lengthscale, don't fit it.
+    '''
     true_tk_ls = np.sqrt(1/(2 * true_gamma))
-    #true_tk_ls = true_gamma/2
+    tk_ls = pm.Uniform("tk_ls", 0, 1)
     tk = pm.gp.cov.Periodic(
         input_dim=input_dim,
         period=true_period,
-        ls=true_tk_ls,
+        ls=tk_ls,
         active_dims=[1],
     )
 
+    # Fit white noise.
+    white_noise = pm.Uniform("white_noise", 0, 1e-1)
+    wk = pm.gp.cov.WhiteNoise(white_noise)
+
     # Build the mean and covariance functions.
-    # TODO: Don't use the true mean value. Fit it instead.
+    '''
+    # Don't use the true mean value. Fit it instead.
     mean_func = pm.gp.mean.Constant(c=true_mean)
+    '''
+    mean_value = pm.Uniform("mean_value", 5, 15)
+    mean_func = pm.gp.mean.Constant(c=mean_value)
+
+    '''
     # TODO: Don't use the true scale value. Fit it instead.
     cov_func = true_scale * tk * rk
+    '''
+    scale = pm.Uniform("scale", 0, 100)
+    cov_func = scale * tk * rk + wk
 
     gp = pm.gp.Latent(
         mean_func=mean_func,
@@ -256,7 +279,16 @@ with pm.Model() as model:
     )
 
     # Optimize.
-    p_opt, result = pm.find_MAP(return_raw=True)
+    # (Start from an unreasoanbly good place.)
+    init = dict(
+        scale=true_scale,
+        tk_ls=true_tk_ls,
+        mean_value=true_mean,
+        rk_length_scale_1=true_metric[0, 0],
+        rk_length_scale_2=true_metric[1, 1]
+    )
+
+    p_opt, result = pm.find_MAP(start=init, return_raw=True)
 
 
 def contourf_from_1d_vectors(x, y, z, ax=None, Nx=None, Ny=None, colorbar=False, colorbar_label=None):
@@ -280,10 +312,11 @@ def contourf_from_1d_vectors(x, y, z, ax=None, Nx=None, Ny=None, colorbar=False,
     return fig
 
 
-fig = contourf_from_1d_vectors(
+fig_amplitude = contourf_from_1d_vectors(
     *gp_xy.T, 
     p_opt[f"amplitude_{true_wavelength:.0f}"]
 )
+fig_amplitude.savefig("amplitude.png")
 
 mean_flux = (flux_mu * np.ones(gp_dispersion.shape)).T
 residual = ((true_wavelength - gp_dispersion)/true_sigma)
@@ -303,58 +336,58 @@ idx = 100
 
 fig, ax = plt.subplots()
 ax.plot(
-    dispersion,
+    dispersion[842:850],
     gp_flux[idx],
     c="k"
 )
 ax.plot(
-    dispersion,
+    dispersion[842:850],
     opt_flux[idx],
     c="tab:red"
 )
 ax.fill_between(
-    dispersion,
+    dispersion[842:850],
     gp_flux[idx] - gp_flux_err[idx],
     gp_flux[idx] + gp_flux_err[idx],
     facecolor="#cccccc",
     zorder=-1
 )
 ax.set_xlim(true_wavelength - 5, true_wavelength + 5)
+fig.savefig(f"spaxal_{idx:.0f}.png")
 
 # Compare to true values.
 true_amplitudes = z[has_photons]
 
-fig = contourf_from_1d_vectors(
+fig_residual = contourf_from_1d_vectors(
     *gp_xy.T,
     p_opt[f"amplitude_{true_wavelength:.0f}"] - true_amplitudes,
     colorbar=True,
     colorbar_label="amplitude residual"
 )
+fig_residual.savefig("residual.png")
 
-'''
 # Let's look at the worst fit.
 idx = np.argmax(np.abs(p_opt[f"amplitude_{true_wavelength:.0f}"] - true_amplitudes))
 
 fig, ax = plt.subplots()
 ax.plot(
-    dispersion,
+    dispersion[842:850],
     gp_flux[idx],
     c="k"
 )
 ax.plot(
-    dispersion,
+    dispersion[842:850],
     opt_flux[idx],
     c="tab:red"
 )
 ax.fill_between(
-    dispersion,
+    dispersion[842:850],
     gp_flux[idx] - gp_flux_err[idx],
     gp_flux[idx] + gp_flux_err[idx],
     facecolor="#cccccc",
     zorder=-1
 )
 ax.set_xlim(true_wavelength - 5, true_wavelength + 5)
-'''
 
 
 '''
